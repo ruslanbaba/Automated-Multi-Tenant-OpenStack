@@ -1,0 +1,253 @@
+# CloudKitty Configuration for OpenStack Billing
+# This file contains the configuration for CloudKitty billing service
+
+# CloudKitty Main Configuration
+cloudkitty:
+  database:
+    connection: "mysql+pymysql://cloudkitty:{{ cloudkitty_database_password }}@{{ database_host }}/cloudkitty"
+    max_pool_size: 20
+    max_overflow: 30
+    pool_timeout: 30
+    pool_recycle: 3600
+
+  # API Configuration
+  api:
+    port: 8889
+    host: "0.0.0.0"
+    workers: 4
+    max_limit: 1000
+    
+  # Authentication
+  keystone_authtoken:
+    auth_type: password
+    auth_url: "{{ keystone_auth_url }}"
+    www_authenticate_uri: "{{ keystone_auth_url }}"
+    project_domain_name: Default
+    user_domain_name: Default
+    project_name: service
+    username: cloudkitty
+    password: "{{ cloudkitty_service_password }}"
+    interface: internal
+    region_name: "{{ openstack_region }}"
+    service_token_roles_required: true
+    memcached_servers: "{{ memcached_servers }}"
+
+  # Orchestrator Configuration
+  orchestrator:
+    coordination_url: "mysql+pymysql://cloudkitty:{{ cloudkitty_database_password }}@{{ database_host }}/cloudkitty"
+    
+  # Collector Configuration
+  collector:
+    # Data collection period in seconds
+    period: 3600  # 1 hour
+    # Number of periods to collect at once
+    collect_period: 1
+    # Services to collect metrics for
+    services:
+      - compute
+      - volume
+      - network.bw.out
+      - network.bw.in
+      - network.floating
+      - image.size
+      - storage.objects.size
+
+  # Fetcher Configuration
+  fetcher:
+    backend: keystone
+    keystone:
+      auth_section: keystone_authtoken
+
+  # Storage Configuration
+  storage:
+    backend: sqlalchemy
+    sqlalchemy:
+      connection: "mysql+pymysql://cloudkitty:{{ cloudkitty_database_password }}@{{ database_host }}/cloudkitty"
+
+  # Rating Configuration
+  rating:
+    default_module: noop
+    modules:
+      - hashmap
+      - pyscripts
+    
+    # Hashmap configuration
+    hashmap:
+      priority: 1
+      
+    # Custom pricing scripts
+    pyscripts:
+      priority: 2
+
+  # Reporting Configuration
+  reporting:
+    # Default currency
+    currency: "{{ billing.currency | default('USD') }}"
+    # Decimal precision for pricing
+    precision: 2
+    # Timezone for reports
+    timezone: UTC
+
+# Pricing Configuration
+pricing:
+  # Compute pricing (per hour)
+  compute:
+    instance:
+      m1.nano: 0.01
+      m1.micro: 0.02
+      m1.tiny: 0.03
+      m1.small: 0.05
+      m1.medium: 0.10
+      m1.large: 0.20
+      m1.xlarge: 0.40
+    
+    # Per vCPU hour
+    vcpu_hour: "{{ billing.pricing.compute.vcpu_hour | default(0.02) }}"
+    
+    # Per GB RAM hour
+    ram_gb_hour: "{{ billing.pricing.compute.ram_gb_hour | default(0.01) }}"
+
+  # Volume pricing (per GB per month)
+  volume:
+    standard: "{{ billing.pricing.storage.volume_gb_month | default(0.10) }}"
+    ssd: 0.20
+    performance: 0.30
+    
+  # Volume snapshot pricing (per GB per month)
+  snapshot:
+    standard: "{{ billing.pricing.storage.snapshot_gb_month | default(0.05) }}"
+
+  # Network pricing
+  network:
+    # Floating IP per hour
+    floating_ip_hour: "{{ billing.pricing.network.floatingip_hour | default(0.01) }}"
+    
+    # Bandwidth per GB
+    bandwidth_out: "{{ billing.pricing.network.bandwidth_gb | default(0.05) }}"
+    bandwidth_in: 0.00  # Usually free
+    
+    # Load balancer per hour
+    load_balancer_hour: 0.025
+
+  # Image storage pricing (per GB per month)
+  image:
+    storage_gb_month: 0.025
+
+  # Object storage pricing (per GB per month)
+  object_storage:
+    standard: 0.023
+    reduced_redundancy: 0.019
+    glacier: 0.004
+
+# Hashmap Rating Rules
+hashmap_rules:
+  # Compute rating rules
+  compute:
+    - service: compute
+      field: flavor_id
+      rules:
+        m1.nano: 0.01
+        m1.micro: 0.02
+        m1.tiny: 0.03
+        m1.small: 0.05
+        m1.medium: 0.10
+        m1.large: 0.20
+        m1.xlarge: 0.40
+
+  # Volume rating rules
+  volume:
+    - service: volume
+      field: volume_type
+      rules:
+        standard: 0.10
+        ssd: 0.20
+        performance: 0.30
+
+  # Network rating rules
+  network:
+    - service: network.floating
+      field: ip
+      flat_rate: 0.01
+      
+    - service: network.bw.out
+      field: bytes
+      rate: 0.00000005  # $0.05 per GB
+
+# Notification Configuration
+notifications:
+  enabled: true
+  driver: messaging
+  transport_url: "rabbit://{{ rabbitmq_user }}:{{ rabbitmq_password }}@{{ rabbitmq_host }}:5672/"
+  topics:
+    - notifications
+
+# Tenant-specific pricing overrides
+tenant_pricing:
+  # Premium tenants get discounted rates
+  premium_discount: 0.15  # 15% discount
+  
+  # Volume discounts based on usage
+  volume_discounts:
+    - threshold: 1000  # GB
+      discount: 0.05   # 5%
+    - threshold: 5000  # GB
+      discount: 0.10   # 10%
+    - threshold: 10000 # GB
+      discount: 0.15   # 15%
+
+# Billing periods and schedules
+billing_schedule:
+  # Monthly billing cycle
+  cycle: monthly
+  
+  # Bill generation day (1-28)
+  bill_day: 1
+  
+  # Grace period for payment (days)
+  grace_period: 15
+  
+  # Late fee percentage
+  late_fee: 0.015  # 1.5%
+
+# Report configuration
+reports:
+  # Automatic report generation
+  auto_generate: true
+  
+  # Report formats
+  formats:
+    - json
+    - csv
+    - pdf
+  
+  # Report delivery
+  delivery:
+    email:
+      enabled: true
+      smtp_server: "{{ smtp_server | default('localhost') }}"
+      smtp_port: 587
+      smtp_user: "{{ smtp_user | default('') }}"
+      smtp_password: "{{ smtp_password | default('') }}"
+    
+    webhook:
+      enabled: false
+      url: "{{ billing_webhook_url | default('') }}"
+
+# Audit and compliance
+audit:
+  enabled: true
+  log_level: INFO
+  retention_days: 1095  # 3 years
+  
+# Performance optimization
+performance:
+  # Database connection pooling
+  db_pool_size: 20
+  db_max_overflow: 30
+  
+  # Caching
+  cache:
+    enabled: true
+    backend: memcached
+    servers: "{{ memcached_servers }}"
+    ttl: 3600  # 1 hour

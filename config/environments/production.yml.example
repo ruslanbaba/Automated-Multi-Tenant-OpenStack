@@ -1,0 +1,842 @@
+# Production Environment Configuration for Multi-Tenant OpenStack
+# This file contains production-ready configuration settings
+# Copy this file to production.yml and customize as needed
+
+# Infrastructure Configuration
+infrastructure:
+  provider: "openstack"  # or "vmware", "bare-metal"
+  region: "RegionOne"
+  availability_zones:
+    - "az1"
+    - "az2"
+    - "az3"
+
+# Network Configuration
+network:
+  external_network: "public"
+  network_type: "vxlan"  # Primary overlay network
+  tunnel_types:
+    - "vxlan"
+  network_vlan_ranges: "physnet1:1000:2999"
+  bridge_mappings: "physnet1:br-ex"
+  
+  # Advanced networking features
+  ml2_plugin: "ovn"  # Use OVN instead of OVS for better scale and HA
+  enable_ovn_distributed_floating_ip: true
+  enable_bgp_dynamic_routing: true
+  enable_ipv6_dual_stack: true
+  
+  # DNS Configuration
+  dns_nameservers:
+    - "8.8.8.8"
+    - "8.8.4.4"
+    - "1.1.1.1"
+  
+  # Network segmentation and security
+  tenant_network_types:
+    - "vxlan"
+    - "vlan"  # For regulated tenants requiring VLAN isolation
+  
+  # QoS and traffic shaping
+  enable_qos: true
+  default_qos_policies:
+    - name: "standard"
+      bandwidth_limit_kbps: 1000000  # 1 Gbps
+    - name: "premium"
+      bandwidth_limit_kbps: 10000000  # 10 Gbps
+
+# Node Configuration
+nodes:
+  controller:
+    count: 3  # HA configuration with 3 controllers
+    flavor: "controller"
+    image: "ubuntu-22.04-server-cloudimg-amd64"
+    networks:
+      - name: "management"
+        cidr: "10.0.0.0/24"
+      - name: "api"
+        cidr: "10.0.1.0/24"
+      - name: "storage"
+        cidr: "10.0.2.0/24"
+    
+  compute:
+    count: 3  # Minimum for proper Ceph deployment
+    flavor: "compute"
+    image: "ubuntu-22.04-server-cloudimg-amd64"
+    networks:
+      - name: "management"
+        cidr: "10.0.0.0/24"
+      - name: "storage"
+        cidr: "10.0.2.0/24"
+      - name: "tenant"
+        cidr: "10.0.3.0/24"
+
+# OpenStack Services Configuration
+services:
+  keystone:
+    token_expiration: 3600
+    fernet_key_rotation_interval: 86400
+    
+  nova:
+    cpu_allocation_ratio: 16.0
+    ram_allocation_ratio: 1.5
+    disk_allocation_ratio: 1.0
+    
+  neutron:
+    dhcp_agents_per_network: 2
+    l3_agents_per_router: 2
+    
+  cinder:
+    volume_backend: "ceph"  # Enterprise-grade distributed storage
+    default_volume_type: "gold"  # High-performance default
+    
+    # Storage backends configuration
+    backends:
+      ceph-gold:
+        volume_driver: "cinder.volume.drivers.rbd.RBDDriver"
+        rbd_pool: "volumes-gold"
+        rbd_user: "cinder"
+        rbd_secret_uuid: "{{ ceph_client_uuid }}"
+        volume_backend_name: "ceph-gold"
+        rbd_flatten_volume_from_snapshot: false
+        rbd_max_clone_depth: 5
+      ceph-silver:
+        volume_driver: "cinder.volume.drivers.rbd.RBDDriver"
+        rbd_pool: "volumes-silver"
+        rbd_user: "cinder"
+        rbd_secret_uuid: "{{ ceph_client_uuid }}"
+        volume_backend_name: "ceph-silver"
+      ceph-bronze:
+        volume_driver: "cinder.volume.drivers.rbd.RBDDriver"
+        rbd_pool: "volumes-bronze"
+        rbd_user: "cinder"
+        rbd_secret_uuid: "{{ ceph_client_uuid }}"
+        volume_backend_name: "ceph-bronze"
+    
+    # Volume types for different service levels
+    volume_types:
+      - name: "gold"
+        backend: "ceph-gold"
+        extra_specs:
+          volume_backend_name: "ceph-gold"
+          replication_enabled: "<is> True"
+      - name: "silver"
+        backend: "ceph-silver"
+        extra_specs:
+          volume_backend_name: "ceph-silver"
+      - name: "bronze"
+        backend: "ceph-bronze"
+        extra_specs:
+          volume_backend_name: "ceph-bronze"
+    
+  horizon:
+    session_timeout: 3600
+    enforce_password_check: true
+
+# Multi-Tenancy Configuration
+tenancy:
+  default_quotas:
+    compute:
+      instances: 10
+      cores: 20
+      ram: 51200  # MB
+      key_pairs: 100
+      server_groups: 10
+      server_group_members: 10
+      
+    volume:
+      volumes: 10
+      snapshots: 10
+      gigabytes: 1000
+      backups: 10
+      backup_gigabytes: 1000
+      
+    network:
+      floatingip: 10
+      network: 10
+      port: 50
+      router: 10
+      subnet: 10
+      subnetpool: -1
+      security_group: 10
+      security_group_rule: 100
+
+  # Predefined tenant templates with service levels
+  tenant_templates:
+    small-bronze:
+      description: "Small bronze tier - cost-effective for development"
+      compute:
+        instances: 5
+        cores: 10
+        ram: 20480
+      volume:
+        volumes: 5
+        gigabytes: 100
+        volume_type: "bronze"
+      network:
+        floatingip: 2
+        network: 3
+        
+    medium-silver:
+      description: "Medium silver tier - balanced performance for staging"
+      compute:
+        instances: 20
+        cores: 40
+        ram: 102400
+      volume:
+        volumes: 20
+        gigabytes: 500
+        volume_type: "silver"
+      network:
+        floatingip: 10
+        network: 10
+        
+    large-gold:
+      description: "Large gold tier - high performance for production"
+      compute:
+        instances: 50
+        cores: 100
+        ram: 512000
+      volume:
+        volumes: 50
+        gigabytes: 2000
+        volume_type: "gold"
+      network:
+        floatingip: 25
+        network: 20
+        
+    enterprise-platinum:
+      description: "Enterprise platinum tier - unlimited for enterprise workloads"
+      compute:
+        instances: 200
+        cores: 500
+        ram: 2048000
+      volume:
+        volumes: 200
+        gigabytes: 10000
+        volume_type: "gold"
+      network:
+        floatingip: 100
+        network: 50
+
+# Database Configuration - Enterprise HA with Galera Clustering
+database:
+  engine: "mysql"
+  ha_mode: "galera"  # MySQL Galera clustering for HA
+  
+  galera:
+    cluster_name: "openstack_galera"
+    nodes:
+      - "controller01"
+      - "controller02" 
+      - "controller03"
+    bind_address: "0.0.0.0"
+    wsrep_cluster_address: "gcomm://controller01,controller02,controller03"
+    wsrep_sst_method: "rsync"
+    
+  # Database security
+  root_password: "{{ mysql_root_password }}"
+  ssl_enabled: true
+  ssl_ca: "/etc/mysql/ssl/ca.pem"
+  ssl_cert: "/etc/mysql/ssl/server-cert.pem"
+  ssl_key: "/etc/mysql/ssl/server-key.pem"
+  
+  # Performance tuning
+  innodb_buffer_pool_size: "1G"
+  max_connections: 1000
+  
+  # Backup configuration
+  backup:
+    enabled: true
+    retention_days: 30
+    schedule: "0 2 * * *"  # Daily at 2 AM
+
+# Enterprise Identity Integration
+identity:
+  # External authentication
+  external_auth:
+    enabled: true
+    protocol: "oidc"  # or "saml"
+    
+  # OIDC Configuration (for Azure AD, Okta, etc.)
+  oidc:
+    issuer_url: "{{ oidc_issuer_url }}"
+    client_id: "{{ oidc_client_id }}"
+    client_secret: "{{ oidc_client_secret }}"
+    scope: "openid profile email groups"
+    user_claim: "preferred_username"
+    groups_claim: "groups"
+    
+  # MFA requirement
+  mfa:
+    enabled: true
+    methods: ["totp", "webauthn"]
+    
+  # SCIM auto-provisioning
+  scim:
+    enabled: true
+    endpoint: "{{ scim_endpoint }}"
+    token: "{{ scim_token }}"
+    
+  # Domain mapping for multi-domain environments
+  domains:
+    - name: "corporate"
+      description: "Corporate users via SSO"
+      external_auth: true
+    - name: "service"
+      description: "Service accounts and API access"
+      external_auth: false
+
+# Enhanced Security Configuration
+security:
+  # TLS/SSL Configuration
+  tls:
+    enabled: true
+    min_version: "1.2"
+    ciphers: "ECDHE+AESGCM:ECDHE+CHACHA20:DHE+AESGCM:DHE+CHACHA20:!aNULL:!MD5:!DSS"
+    
+  # API security
+  api:
+    rate_limiting: true
+    max_requests_per_minute: 1000
+    enable_cors: false
+    allowed_origins: []
+    
+  # Image security scanning
+  image_scanning:
+    enabled: true
+    scanner: "clair"  # or "trivy"
+    policy: "strict"
+    
+  # Audit logging
+  audit:
+    enabled: true
+    log_level: "INFO"
+    targets: ["file", "syslog"]
+    
+  # Secrets management
+  secrets:
+    backend: "barbican"  # OpenStack Barbican for secret management
+    hsm_enabled: false
+    
+# Unified Limits (replaces legacy quotas)
+unified_limits:
+  enabled: true
+  
+  # Resource limits per service level
+  limits:
+    bronze:
+      compute.instances: 5
+      compute.cores: 10
+      compute.ram: 20480
+      volume.volumes: 5
+      volume.gigabytes: 100
+      network.floating_ips: 2
+      
+    silver:
+      compute.instances: 20
+      compute.cores: 40
+      compute.ram: 102400
+      volume.volumes: 20
+      volume.gigabytes: 500
+      network.floating_ips: 10
+      
+    gold:
+      compute.instances: 50
+      compute.cores: 100
+      compute.ram: 512000
+      volume.volumes: 50
+      volume.gigabytes: 2000
+      network.floating_ips: 25
+      
+    platinum:
+      compute.instances: 200
+      compute.cores: 500
+      compute.ram: 2048000
+      volume.volumes: 200
+      volume.gigabytes: 10000
+      network.floating_ips: 100
+
+# RBAC Configuration with Policy-as-Code
+rbac:
+  # Policy engine
+  policy_engine: "oslo.policy"
+  policy_format: "yaml"  # Enhanced YAML format for better readability
+  
+  # Custom roles with fine-grained permissions
+  custom_roles:
+    - name: "cloud_admin"
+      description: "Cloud infrastructure administrator"
+      permissions:
+        - "admin_required"
+        - "identity:*"
+        - "compute:*"
+        - "volume:*"
+        - "network:*"
+        - "image:*"
+        
+    - name: "tenant_admin"
+      description: "Administrative access within tenant scope"
+      permissions:
+        - "identity:list_projects"
+        - "compute:*"
+        - "volume:*"
+        - "network:*"
+        - "image:get_images"
+        - "image:get_image_members"
+        
+    - name: "tenant_power_user"
+      description: "Advanced user with image management capabilities"
+      permissions:
+        - "compute:*"
+        - "volume:*"
+        - "network:*"
+        - "image:add_image"
+        - "image:modify_image"
+        - "image:publicize_image"
+        
+    - name: "tenant_user"
+      description: "Standard user access within tenant scope"
+      permissions:
+        - "compute:create_server"
+        - "compute:delete_server"
+        - "compute:get_server"
+        - "compute:list_servers"
+        - "compute:start_server"
+        - "compute:stop_server"
+        - "compute:reboot_server"
+        - "volume:create_volume"
+        - "volume:delete_volume"
+        - "volume:attach_volume"
+        - "volume:detach_volume"
+        - "network:create_network"
+        - "network:delete_network"
+        - "network:create_subnet"
+        - "network:delete_subnet"
+        - "network:create_port"
+        - "network:delete_port"
+        
+    - name: "tenant_viewer"
+      description: "Read-only access within tenant scope"
+      permissions:
+        - "compute:get_server"
+        - "compute:list_servers"
+        - "volume:get_volume"
+        - "volume:list_volumes"
+        - "network:get_network"
+        - "network:list_networks"
+        - "image:get_images"
+        
+    - name: "billing_admin"
+      description: "Billing and cost management administrator"
+      permissions:
+        - "rating:*"
+        - "billing:*"
+        - "telemetry:get_samples"
+        
+  # Policy inheritance and delegation
+  policy_delegation:
+    enabled: true
+    max_delegation_depth: 3
+    
+  # Audit and compliance
+  policy_audit:
+    enabled: true
+    log_policy_violations: true
+    violation_actions: ["log", "email", "block"]
+
+# Enhanced Billing Configuration with Chargeback/Showback
+billing:
+  enabled: true
+  engine: "cloudkitty"
+  currency: "USD"
+  billing_period: "monthly"
+  
+  # Multi-tier pricing based on service levels
+  pricing:
+    compute:
+      # Bronze tier pricing
+      bronze:
+        instance_hour: 0.03
+        vcpu_hour: 0.015
+        ram_gb_hour: 0.008
+      # Silver tier pricing  
+      silver:
+        instance_hour: 0.05
+        vcpu_hour: 0.025
+        ram_gb_hour: 0.012
+      # Gold tier pricing
+      gold:
+        instance_hour: 0.08
+        vcpu_hour: 0.04
+        ram_gb_hour: 0.02
+      # Platinum tier pricing
+      platinum:
+        instance_hour: 0.12
+        vcpu_hour: 0.06
+        ram_gb_hour: 0.03
+        
+    storage:
+      # Per service level pricing
+      bronze:
+        volume_gb_month: 0.08
+        snapshot_gb_month: 0.04
+      silver:
+        volume_gb_month: 0.12
+        snapshot_gb_month: 0.06
+      gold:
+        volume_gb_month: 0.20
+        snapshot_gb_month: 0.10
+      platinum:
+        volume_gb_month: 0.30
+        snapshot_gb_month: 0.15
+        
+    network:
+      floating_ip_hour: 0.005
+      load_balancer_hour: 0.025
+      vpn_connection_hour: 0.045
+      data_transfer_gb: 0.09
+      
+    # Premium services
+    premium:
+      backup_gb_month: 0.05
+      monitoring_instance_hour: 0.02
+      support_incident: 50.00
+      
+  # Cost allocation and chargeback
+  chargeback:
+    enabled: true
+    methods: ["department", "project", "cost_center"]
+    
+    # Budget controls
+    budgets:
+      enabled: true
+      alerts:
+        - threshold: 80
+          action: "email"
+        - threshold: 95
+          action: "email_escalate"
+        - threshold: 100
+          action: "suspend_new_resources"
+          
+  # Billing reports and analytics
+  reporting:
+    enabled: true
+    formats: ["pdf", "csv", "json", "excel"]
+    schedule:
+      daily: "0 6 * * *"
+      weekly: "0 6 * * 1"
+      monthly: "0 6 1 * *"
+    recipients:
+      - "billing@company.com"
+      - "finance@company.com"
+      
+  # Integration with external billing systems
+  external_integration:
+    enabled: false
+    system: "sap"  # or "oracle", "custom"
+    api_endpoint: "{{ external_billing_api }}"
+    auth_token: "{{ external_billing_token }}"
+
+# Enhanced Monitoring and Observability
+monitoring:
+  enabled: true
+  
+  # Multi-tenant telemetry
+  telemetry:
+    - "ceilometer"
+    - "gnocchi"
+    - "aodh"  # Alarming service
+  metrics_retention_days: 365
+  
+  # Prometheus configuration
+  prometheus:
+    enabled: true
+    scrape_interval: "15s"
+    evaluation_interval: "15s"
+    retention: "90d"
+    storage_path: "/var/lib/prometheus"
+    
+    # Multi-tenant metrics isolation
+    tenant_isolation: true
+    metric_relabeling:
+      - source_labels: [__meta_openstack_project_id]
+        target_label: tenant_id
+        
+  # Grafana dashboards
+  grafana:
+    enabled: true
+    admin_password: "{{ grafana_admin_password }}"
+    session_lifetime: "24h"
+    
+    # Pre-configured dashboards
+    dashboards:
+      - name: "Multi-Tenant Overview"
+        path: "/etc/grafana/dashboards/multi-tenant-overview.json"
+      - name: "Resource Utilization"
+        path: "/etc/grafana/dashboards/resource-utilization.json"
+      - name: "Billing Analytics"
+        path: "/etc/grafana/dashboards/billing-analytics.json"
+      - name: "Security Monitoring"
+        path: "/etc/grafana/dashboards/security-monitoring.json"
+        
+  # Alerting configuration
+  alerting:
+    enabled: true
+    
+    # Alert rules
+    rules:
+      - name: "High CPU Usage"
+        expr: "cpu_usage > 85"
+        duration: "5m"
+        severity: "warning"
+        
+      - name: "Storage Full"
+        expr: "disk_usage > 90"
+        duration: "2m"
+        severity: "critical"
+        
+      - name: "Tenant Quota Exceeded"
+        expr: "quota_usage > 95"
+        duration: "1m"
+        severity: "warning"
+        
+    # Notification channels
+    notifications:
+      - name: "email"
+        type: "email"
+        settings:
+          addresses: ["admin@company.com"]
+      - name: "slack"
+        type: "slack"
+        settings:
+          webhook_url: "{{ slack_webhook_url }}"
+
+# Enhanced Security Configuration  
+security:
+  # TLS/SSL Configuration - SECURITY ENHANCED
+  ssl:
+    enabled: true
+    min_version: "1.3"  # SECURITY FIX: Use TLS 1.3 minimum
+    max_version: "1.3"  # SECURITY FIX: Force TLS 1.3 only
+    cert_path: "/etc/ssl/certs/openstack.crt"
+    key_path: "/etc/ssl/private/openstack.key"
+    ca_cert_path: "/etc/ssl/certs/ca.crt"
+    # SECURITY FIX: Use only secure cipher suites
+    ciphers: "TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:TLS_AES_128_GCM_SHA256"
+    # SECURITY FIX: Add HSTS and security headers
+    hsts_enabled: true
+    hsts_max_age: 31536000  # 1 year
+    hsts_include_subdomains: true
+    hsts_preload: true
+    # Certificate validation
+    verify_certificates: true
+    ocsp_stapling: true
+    
+  # API security - SECURITY ENHANCED
+  api:
+    rate_limiting: true
+    max_requests_per_minute: 100  # SECURITY FIX: Reduced from 1000
+    max_requests_per_hour: 1000   # SECURITY FIX: Added hourly limit
+    max_concurrent_connections: 50
+    enable_cors: false
+    allowed_origins: []
+    # SECURITY FIX: Add API security headers
+    security_headers:
+      X-Content-Type-Options: "nosniff"
+      X-Frame-Options: "DENY"
+      X-XSS-Protection: "1; mode=block"
+      Strict-Transport-Security: "max-age=31536000; includeSubDomains; preload"
+      Referrer-Policy: "strict-origin-when-cross-origin"
+      Content-Security-Policy: "default-src 'self'"
+    # Input validation
+    max_request_size: "1MB"
+    request_timeout: 30
+    
+  # Image security scanning - SECURITY ENHANCED
+  image_scanning:
+    enabled: true
+    scanner: "trivy"  # SECURITY FIX: Use Trivy for better security scanning
+    policy: "strict"
+    # SECURITY FIX: Enhanced scanning configuration
+    scan_on_upload: true
+    scan_on_schedule: true
+    schedule: "0 2 * * *"  # Daily at 2 AM
+    quarantine_vulnerable_images: true
+    vulnerability_database_update: "hourly"
+    severity_threshold: "MEDIUM"  # Block medium and above vulnerabilities
+    
+  # Firewall configuration - SECURITY ENHANCED
+  firewall:
+    enabled: true
+    default_policy: "DROP"
+    # SECURITY FIX: Enhanced firewall rules with specific protocols and sources
+    rules:
+      - name: "ssh_management"
+        port: 22
+        protocol: "tcp"
+        source: "10.0.0.0/24"  # Management network only
+        action: "ACCEPT"
+      - name: "https_api"
+        port: 443
+        protocol: "tcp"
+        source: "10.0.1.0/24"  # API network only
+        action: "ACCEPT"
+      - name: "keystone_api"
+        port: 5000
+        protocol: "tcp"
+        source: "10.0.1.0/24"
+        action: "ACCEPT"
+      # SECURITY FIX: Deny all other traffic
+      - name: "deny_all"
+        action: "DROP"
+        
+  # Intrusion Detection System
+  ids:
+    enabled: true
+    engine: "suricata"
+    rules_update: "daily"
+    alert_threshold: "medium"
+    
+  # DDoS Protection
+  ddos_protection:
+    enabled: true
+    syn_flood_protection: true
+    rate_limiting: true
+    connection_tracking: true
+    
+  # Secrets management - SECURITY ENHANCED
+  secrets:
+    backend: "barbican"  # OpenStack Barbican for secret management
+    hsm_enabled: true    # SECURITY FIX: Enable HSM for production
+    # SECURITY FIX: Enhanced secret management configuration
+    encryption:
+      algorithm: "AES-256-GCM"
+      key_rotation_interval: "30d"
+      key_derivation: "PBKDF2"
+    access_control:
+      require_mfa: true
+      audit_access: true
+      
+  # Access Control and Authentication
+  access_control:
+    session_timeout: 900  # SECURITY FIX: 15 minutes instead of 1 hour
+    max_failed_attempts: 3
+    lockout_duration: 1800  # 30 minutes
+    password_policy:
+      min_length: 14
+      require_uppercase: true
+      require_lowercase: true
+      require_numbers: true
+      require_special_chars: true
+      password_history: 12
+      max_age_days: 90
+      
+  # Audit configuration - SECURITY ENHANCED
+  audit:
+    enabled: true
+    log_level: "INFO"
+    retention_days: 2555  # SECURITY FIX: 7 years for compliance
+    format: "cadf"  # Cloud Audit Data Federation format
+    targets: ["file", "syslog", "elasticsearch"]
+    # SECURITY FIX: Enhanced audit events
+    events:
+      - "authentication"
+      - "authorization"
+      - "resource_creation"
+      - "resource_deletion"
+      - "resource_modification"
+      - "configuration_changes"
+      - "privilege_escalation"
+      - "failed_login_attempts"
+      - "admin_actions"
+      - "data_access"
+    # Real-time security monitoring
+    real_time_monitoring: true
+    anomaly_detection: true
+
+# Enterprise Backup and Disaster Recovery
+backup:
+  enabled: true
+  
+  # Database backups
+  database:
+    schedule: "0 2 * * *"  # Daily at 2 AM
+    retention_days: 30
+    storage_backend: "swift"
+    encryption: true
+    
+  # Configuration backups
+  configuration:
+    schedule: "0 3 * * *"  # Daily at 3 AM
+    retention_days: 90
+    include_secrets: false  # Secrets handled separately
+    
+  # Volume backups
+  volumes:
+    enabled: true
+    incremental: true
+    schedule: "0 1 * * *"  # Daily at 1 AM
+    retention_days: 14
+    
+  # Disaster recovery
+  disaster_recovery:
+    enabled: true
+    secondary_site: "{{ dr_site_url }}"
+    replication_interval: "4h"
+    rpo_hours: 4  # Recovery Point Objective
+    rto_hours: 2  # Recovery Time Objective
+
+# High Availability Configuration
+ha:
+  enabled: true
+  
+  # Virtual IP configuration
+  vip:
+    api: "10.0.1.100"
+    internal: "10.0.0.100"
+    
+  # Load balancer configuration
+  load_balancer:
+    type: "haproxy"
+    ssl_termination: true
+    health_checks: true
+    
+  cluster_nodes: 3
+  
+  # Message queue HA
+  message_queue:
+    cluster_nodes: 3
+    type: "rabbitmq"
+  
+# Enhanced Logging and Audit
+logging:
+  # Centralized logging
+  centralized: true
+  
+  # OpenStack service logs
+  openstack_services:
+    level: "INFO"
+    format: "json"
+    output: "syslog"
+    max_file_size: "100MB"
+    max_files: 10
+    
+  # Security event logging
+  security:
+    enabled: true
+    siem_integration: true
+    siem_endpoint: "{{ siem_endpoint }}"
+    
+  # Log forwarding
+  forwarding:
+    enabled: true
+    destinations:
+      - type: "elasticsearch"
+        host: "{{ elasticsearch_host }}"
+        port: 9200
+        ssl: true
+      - type: "splunk"
+        host: "{{ splunk_host }}"
+        port: 9997
+        ssl: true

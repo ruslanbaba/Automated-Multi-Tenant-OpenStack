@@ -1,0 +1,68 @@
+# Terraform Variables for OpenStack Multi-Tenant Environment
+# Production Environment Configuration
+
+# Provider Configuration
+openstack_auth_url = "https://openstack.example.com:5000/v3"
+openstack_region = "RegionOne"
+
+# Infrastructure Configuration
+availability_zones = ["az1", "az2", "az3"]
+
+# Controller Node Configuration
+controller_count = 3  # HA configuration
+controller_flavor = "m1.xlarge"
+controller_image = "ubuntu-22.04-server-cloudimg-amd64"
+
+# Compute Node Configuration
+compute_count = 3  # Minimum for Ceph deployment
+compute_flavor = "m1.large"
+compute_image = "ubuntu-22.04-server-cloudimg-amd64"
+
+# Network Configuration
+external_network_name = "public"
+management_network_cidr = "10.0.0.0/24"
+api_network_cidr = "10.0.1.0/24"
+storage_network_cidr = "10.0.2.0/24"
+tenant_network_cidr = "10.0.3.0/24"
+
+# Security Groups - Restricted Access
+allowed_ssh_cidrs = ["10.0.0.0/24"]  # Only management network
+allowed_api_cidrs = ["10.0.0.0/24", "10.0.1.0/24"]  # Management and API networks only
+
+# Storage Configuration
+volume_size = 100  # GB
+volume_type = "standard"
+
+# High Availability Configuration
+enable_ha = true
+vip_address = "10.0.1.100"
+
+# Monitoring Configuration
+enable_monitoring = true
+# SECURITY FIX: Remove hardcoded password - use environment variable
+# grafana_admin_password = "CHANGE_ME_IN_PRODUCTION"  # Use vault or env var instead
+
+# SSL Configuration
+enable_ssl = true
+ssl_cert_path = "/etc/ssl/certs/openstack.crt"
+ssl_key_path = "/etc/ssl/private/openstack.key"
+
+# Tags
+common_tags = {
+  Environment = "production"
+  Project     = "openstack-multi-tenant"
+  Owner       = "cloud-ops"
+  Terraform   = "true"
+  SecurityLevel = "high"
+}
+
+# Tenant Configuration
+default_tenant_quotas = {
+  instances = 10
+  cores     = 20
+  ram       = 51200
+  volumes   = 10
+  gigabytes = 1000
+  networks  = 10
+  routers   = 10
+}

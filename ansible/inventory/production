@@ -1,0 +1,107 @@
+# Production Inventory for OpenStack Multi-Tenant Environment
+# SECURITY ENHANCED: Implements secure configurations and removes security risks
+
+[controllers]
+controller-1 ansible_host=10.0.1.10 management_ip=10.0.0.10 api_ip=10.0.1.10 storage_ip=10.0.2.10
+controller-2 ansible_host=10.0.1.11 management_ip=10.0.0.11 api_ip=10.0.1.11 storage_ip=10.0.2.11
+controller-3 ansible_host=10.0.1.12 management_ip=10.0.0.12 api_ip=10.0.1.12 storage_ip=10.0.2.12
+
+[compute]
+compute-1 ansible_host=10.0.1.13 management_ip=10.0.0.13 storage_ip=10.0.2.13 tenant_ip=10.0.3.13
+compute-2 ansible_host=10.0.1.14 management_ip=10.0.0.14 storage_ip=10.0.2.14 tenant_ip=10.0.3.14
+compute-3 ansible_host=10.0.1.15 management_ip=10.0.0.15 storage_ip=10.0.2.15 tenant_ip=10.0.3.15
+
+[monitoring]
+monitoring-1 ansible_host=10.0.1.20 management_ip=10.0.0.20
+
+[billing]
+billing-1 ansible_host=10.0.1.21 management_ip=10.0.0.21
+
+[openstack:children]
+controllers
+compute
+
+[infrastructure:children]
+openstack
+monitoring
+billing
+
+[all:vars]
+# SSH Configuration - SECURITY ENHANCED
+ansible_user=ubuntu
+ansible_ssh_private_key_file=~/.ssh/openstack_key.pem
+# SECURITY FIX: Enable strict host key checking and proper SSH security
+ansible_ssh_common_args='-o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts -o ServerAliveInterval=30 -o ConnectTimeout=10 -o LogLevel=ERROR'
+
+# Python Configuration
+ansible_python_interpreter=/usr/bin/python3
+
+# OpenStack Configuration
+openstack_release=zed
+openstack_domain=openstack.local
+
+# Network Configuration
+management_interface=ens3
+api_interface=ens4
+storage_interface=ens5
+tenant_interface=ens6
+
+# Database Configuration - SECURITY ENHANCED
+database_host=10.0.0.10
+# SECURITY FIX: All passwords must be in vault
+database_root_password="{{ vault_database_root_password }}"
+
+# Message Queue Configuration
+rabbitmq_host=10.0.0.10
+rabbitmq_user=openstack
+rabbitmq_password="{{ vault_rabbitmq_password }}"
+
+# Cache Configuration
+memcached_servers=10.0.0.10:11211
+
+# Keystone Configuration
+keystone_admin_password="{{ vault_keystone_admin_password }}"
+keystone_database_password="{{ vault_keystone_database_password }}"
+
+# Service Passwords
+nova_database_password="{{ vault_nova_database_password }}"
+nova_service_password="{{ vault_nova_service_password }}"
+placement_database_password="{{ vault_placement_database_password }}"
+placement_service_password="{{ vault_placement_service_password }}"
+glance_database_password="{{ vault_glance_database_password }}"
+glance_service_password="{{ vault_glance_service_password }}"
+neutron_database_password="{{ vault_neutron_database_password }}"
+neutron_service_password="{{ vault_neutron_service_password }}"
+cinder_database_password="{{ vault_cinder_database_password }}"
+cinder_service_password="{{ vault_cinder_service_password }}"
+
+# SSL Configuration
+enable_ssl=true
+ssl_cert_path=/etc/ssl/certs/openstack.crt
+ssl_key_path=/etc/ssl/private/openstack.key
+
+# High Availability Configuration
+enable_ha=false
+vip_address=10.0.1.100
+
+# Monitoring Configuration
+enable_monitoring=true
+prometheus_retention_days=365
+grafana_admin_password="{{ vault_grafana_admin_password }}"
+
+# Billing Configuration
+enable_billing=true
+cloudkitty_database_password="{{ vault_cloudkitty_database_password }}"
+cloudkitty_service_password="{{ vault_cloudkitty_service_password }}"
+
+[controllers:vars]
+node_type=controller
+
+[compute:vars]
+node_type=compute
+
+[monitoring:vars]
+node_type=monitoring
+
+[billing:vars]
+node_type=billing

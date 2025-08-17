@@ -1,0 +1,286 @@
+# Tenant Onboarding Playbook for OpenStack Multi-Tenant Environment
+---
+- name: Onboard new tenants to OpenStack
+  hosts: controllers[0]
+  become: true
+  gather_facts: false
+  vars:
+    environment_name: "{{ env | default('production') }}"
+    config_dir: "../config"
+    tenant_config_file: "{{ tenant_config | default('tenant-config.yml') }}"
+  
+  pre_tasks:
+    - name: Load environment configuration
+      include_vars: "{{ config_dir }}/environments/{{ environment_name }}.yml"
+      tags: always
+
+    - name: Load tenant configuration
+      include_vars: "{{ config_dir }}/{{ tenant_config_file }}"
+      tags: always
+      when: tenant_config_file is defined
+
+    - name: Validate required variables
+      assert:
+        that:
+          - tenants is defined
+          - tenants | length > 0
+        fail_msg: "No tenants defined for onboarding"
+
+  tasks:
+    - name: Source admin credentials
+      shell: source /root/admin-openrc && echo "Sourced admin credentials"
+      args:
+        executable: /bin/bash
+      environment:
+        OS_PROJECT_DOMAIN_NAME: Default
+        OS_USER_DOMAIN_NAME: Default
+        OS_PROJECT_NAME: admin
+        OS_USERNAME: admin
+        OS_PASSWORD: "{{ keystone_admin_password }}"
+        OS_AUTH_URL: "{{ keystone_auth_url }}"
+        OS_INTERFACE: internal
+        OS_IDENTITY_API_VERSION: "3"
+      changed_when: false
+
+    - name: Create tenants (projects)
+      openstack.cloud.project:
+        cloud: admin
+        state: present
+        name: "{{ item.name }}"
+        description: "{{ item.description | default('Tenant ' + item.name) }}"
+        domain_id: default
+        enabled: true
+      loop: "{{ tenants }}"
+      register: tenant_creation
+      tags: tenants
+
+    - name: Create tenant admin users
+      openstack.cloud.user:
+        cloud: admin
+        state: present
+        name: "{{ item.admin_user.username }}"
+        password: "{{ item.admin_user.password }}"
+        email: "{{ item.admin_user.email | default(item.admin_user.username + '@' + item.name + '.local') }}"
+        description: "Administrator for {{ item.name }} tenant"
+        domain_id: default
+        enabled: true
+      loop: "{{ tenants }}"
+      register: admin_user_creation
+      tags: users
+
+    - name: Assign admin role to tenant admins
+      openstack.cloud.role_assignment:
+        cloud: admin
+        user: "{{ item.admin_user.username }}"
+        role: admin
+        project: "{{ item.name }}"
+      loop: "{{ tenants }}"
+      tags: roles
+
+    - name: Create additional tenant users
+      openstack.cloud.user:
+        cloud: admin
+        state: present
+        name: "{{ user.username }}"
+        password: "{{ user.password }}"
+        email: "{{ user.email | default(user.username + '@' + item.name + '.local') }}"
+        description: "{{ user.description | default('User for ' + item.name + ' tenant') }}"
+        domain_id: default
+        enabled: true
+      loop: "{{ tenants | subelements('users', skip_missing=True) }}"
+      register: user_creation
+      tags: users
+
+    - name: Assign roles to tenant users
+      openstack.cloud.role_assignment:
+        cloud: admin
+        user: "{{ user.username }}"
+        role: "{{ user.role | default('member') }}"
+        project: "{{ item.name }}"
+      loop: "{{ tenants | subelements('users', skip_missing=True) }}"
+      tags: roles
+
+    - name: Set compute quotas for tenants
+      openstack.cloud.quota:
+        cloud: admin
+        name: "{{ item.name }}"
+        cores: "{{ item.quotas.compute.cores | default(tenancy.default_quotas.compute.cores) }}"
+        instances: "{{ item.quotas.compute.instances | default(tenancy.default_quotas.compute.instances) }}"
+        ram: "{{ item.quotas.compute.ram | default(tenancy.default_quotas.compute.ram) }}"
+        key_pairs: "{{ item.quotas.compute.key_pairs | default(tenancy.default_quotas.compute.key_pairs) }}"
+        server_groups: "{{ item.quotas.compute.server_groups | default(tenancy.default_quotas.compute.server_groups) }}"
+        server_group_members: "{{ item.quotas.compute.server_group_members | default(tenancy.default_quotas.compute.server_group_members) }}"
+      loop: "{{ tenants }}"
+      tags: quotas
+
+    - name: Set volume quotas for tenants
+      command: >
+        openstack quota set
+        --volumes {{ item.quotas.volume.volumes | default(tenancy.default_quotas.volume.volumes) }}
+        --snapshots {{ item.quotas.volume.snapshots | default(tenancy.default_quotas.volume.snapshots) }}
+        --gigabytes {{ item.quotas.volume.gigabytes | default(tenancy.default_quotas.volume.gigabytes) }}
+        --backups {{ item.quotas.volume.backups | default(tenancy.default_quotas.volume.backups) }}
+        --backup-gigabytes {{ item.quotas.volume.backup_gigabytes | default(tenancy.default_quotas.volume.backup_gigabytes) }}
+        {{ item.name }}
+      loop: "{{ tenants }}"
+      environment:
+        OS_PROJECT_DOMAIN_NAME: Default
+        OS_USER_DOMAIN_NAME: Default
+        OS_PROJECT_NAME: admin
+        OS_USERNAME: admin
+        OS_PASSWORD: "{{ keystone_admin_password }}"
+        OS_AUTH_URL: "{{ keystone_auth_url }}"
+        OS_INTERFACE: internal
+        OS_IDENTITY_API_VERSION: "3"
+      tags: quotas
+
+    - name: Set network quotas for tenants
+      command: >
+        openstack quota set
+        --networks {{ item.quotas.network.network | default(tenancy.default_quotas.network.network) }}
+        --subnets {{ item.quotas.network.subnet | default(tenancy.default_quotas.network.subnet) }}
+        --ports {{ item.quotas.network.port | default(tenancy.default_quotas.network.port) }}
+        --routers {{ item.quotas.network.router | default(tenancy.default_quotas.network.router) }}
+        --floating-ips {{ item.quotas.network.floatingip | default(tenancy.default_quotas.network.floatingip) }}
+        --security-groups {{ item.quotas.network.security_group | default(tenancy.default_quotas.network.security_group) }}
+        --security-group-rules {{ item.quotas.network.security_group_rule | default(tenancy.default_quotas.network.security_group_rule) }}
+        {{ item.name }}
+      loop: "{{ tenants }}"
+      environment:
+        OS_PROJECT_DOMAIN_NAME: Default
+        OS_USER_DOMAIN_NAME: Default
+        OS_PROJECT_NAME: admin
+        OS_USERNAME: admin
+        OS_PASSWORD: "{{ keystone_admin_password }}"
+        OS_AUTH_URL: "{{ keystone_auth_url }}"
+        OS_INTERFACE: internal
+        OS_IDENTITY_API_VERSION: "3"
+      tags: quotas
+
+    - name: Create tenant networks
+      openstack.cloud.network:
+        cloud: admin
+        state: present
+        name: "{{ item.name }}-internal"
+        project: "{{ item.name }}"
+        shared: false
+        external: false
+        provider_network_type: "{{ item.network.type | default('vxlan') }}"
+        provider_segmentation_id: "{{ item.network.vlan_id | default(omit) }}"
+      loop: "{{ tenants }}"
+      when: item.create_network | default(true)
+      tags: networks
+
+    - name: Create tenant subnets
+      openstack.cloud.subnet:
+        cloud: admin
+        state: present
+        network_name: "{{ item.name }}-internal"
+        name: "{{ item.name }}-subnet"
+        cidr: "{{ item.network.cidr | default('192.168.' + (loop.index * 10) + '.0/24') }}"
+        dns_nameservers: "{{ item.network.dns_nameservers | default(network.dns_nameservers) }}"
+        project: "{{ item.name }}"
+        enable_dhcp: true
+        ip_version: 4
+      loop: "{{ tenants }}"
+      loop_control:
+        index_var: loop_index
+      when: item.create_network | default(true)
+      tags: networks
+
+    - name: Create tenant routers
+      openstack.cloud.router:
+        cloud: admin
+        state: present
+        name: "{{ item.name }}-router"
+        project: "{{ item.name }}"
+        network: "{{ network.external_network }}"
+        enable_snat: true
+        interfaces:
+          - net: "{{ item.name }}-internal"
+            subnet: "{{ item.name }}-subnet"
+      loop: "{{ tenants }}"
+      when: item.create_router | default(true)
+      tags: networks
+
+    - name: Create default security group rules
+      openstack.cloud.security_group_rule:
+        cloud: admin
+        security_group: default
+        project: "{{ item.name }}"
+        protocol: "{{ rule.protocol }}"
+        port_range_min: "{{ rule.port_range_min | default(omit) }}"
+        port_range_max: "{{ rule.port_range_max | default(omit) }}"
+        remote_ip_prefix: "{{ rule.remote_ip_prefix | default(omit) }}"
+        remote_group: "{{ rule.remote_group | default(omit) }}"
+        direction: "{{ rule.direction | default('ingress') }}"
+        ethertype: "{{ rule.ethertype | default('IPv4') }}"
+      loop: "{{ tenants | subelements('security_rules', skip_missing=True) }}"
+      when: item.1 is defined
+      tags: security
+
+    - name: Create tenant keypairs
+      openstack.cloud.keypair:
+        cloud: admin
+        state: present
+        name: "{{ item.name }}-keypair"
+        public_key_file: "{{ item.keypair.public_key_file | default(omit) }}"
+        public_key: "{{ item.keypair.public_key | default(omit) }}"
+      loop: "{{ tenants }}"
+      when: item.create_keypair | default(true)
+      tags: keypairs
+
+    - name: Create initial instances (if requested)
+      openstack.cloud.server:
+        cloud: admin
+        state: present
+        name: "{{ item.0.name }}-{{ item.1.name }}"
+        image: "{{ item.1.image | default('ubuntu-22.04') }}"
+        flavor: "{{ item.1.flavor | default('m1.small') }}"
+        key_name: "{{ item.1.key_name | default(item.0.name + '-keypair') }}"
+        network: "{{ item.1.network | default(item.0.name + '-internal') }}"
+        security_groups: "{{ item.1.security_groups | default(['default']) }}"
+        meta: "{{ item.1.metadata | default({}) }}"
+        userdata: "{{ item.1.userdata | default(omit) }}"
+        wait: true
+        timeout: 300
+      loop: "{{ tenants | subelements('instances', skip_missing=True) }}"
+      when: item.1 is defined
+      tags: instances
+
+    - name: Generate tenant credentials files
+      template:
+        src: tenant-openrc.j2
+        dest: "/root/{{ item.name }}-openrc"
+        mode: '0600'
+        owner: root
+        group: root
+      loop: "{{ tenants }}"
+      vars:
+        tenant_name: "{{ item.name }}"
+        tenant_user: "{{ item.admin_user.username }}"
+        tenant_password: "{{ item.admin_user.password }}"
+      tags: credentials
+
+    - name: Create tenant onboarding summary
+      template:
+        src: tenant-summary.j2
+        dest: "/root/{{ item.name }}-summary.txt"
+        mode: '0644'
+        owner: root
+        group: root
+      loop: "{{ tenants }}"
+      tags: summary
+
+    - name: Display onboarding results
+      debug:
+        msg: |
+          Tenant {{ item.name }} has been successfully onboarded:
+          - Project ID: {{ (tenant_creation.results | selectattr('item.name', 'equalto', item.name) | first).project.id }}
+          - Admin User: {{ item.admin_user.username }}
+          - Internal Network: {{ item.name }}-internal
+          - Router: {{ item.name }}-router
+          - Credentials file: /root/{{ item.name }}-openrc
+          - Summary file: /root/{{ item.name }}-summary.txt
+      loop: "{{ tenants }}"
+      tags: summary

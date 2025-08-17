@@ -1,0 +1,452 @@
+---
+# Security Hardening Playbook for OpenStack Multi-Tenant Environment
+# Implements comprehensive security controls and best practices
+
+- name: Security Hardening for OpenStack Infrastructure
+  hosts: all
+  become: true
+  vars:
+    # Security configuration variables
+    security_hardening_enabled: true
+    fail2ban_enabled: true
+    ufw_enabled: true
+    automatic_updates_enabled: true
+    ssh_hardening_enabled: true
+    
+  tasks:
+    - name: Update system packages
+      apt:
+        update_cache: yes
+        upgrade: dist
+        autoremove: yes
+        autoclean: yes
+      when: ansible_os_family == "Debian"
+      tags:
+        - security
+        - updates
+
+    - name: Install security packages
+      apt:
+        name:
+          - fail2ban
+          - ufw
+          - rkhunter
+          - chkrootkit
+          - aide
+          - auditd
+          - apparmor
+          - apparmor-utils
+          - unattended-upgrades
+          - apt-listchanges
+        state: present
+      when: ansible_os_family == "Debian"
+      tags:
+        - security
+        - packages
+
+    # SSH Hardening
+    - name: Configure SSH hardening
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: "{{ item.regexp }}"
+        line: "{{ item.line }}"
+        backup: yes
+      with_items:
+        - { regexp: '^#?PermitRootLogin', line: 'PermitRootLogin no' }
+        - { regexp: '^#?PasswordAuthentication', line: 'PasswordAuthentication no' }
+        - { regexp: '^#?PubkeyAuthentication', line: 'PubkeyAuthentication yes' }
+        - { regexp: '^#?PermitEmptyPasswords', line: 'PermitEmptyPasswords no' }
+        - { regexp: '^#?MaxAuthTries', line: 'MaxAuthTries 3' }
+        - { regexp: '^#?ClientAliveInterval', line: 'ClientAliveInterval 300' }
+        - { regexp: '^#?ClientAliveCountMax', line: 'ClientAliveCountMax 2' }
+        - { regexp: '^#?LoginGraceTime', line: 'LoginGraceTime 60' }
+        - { regexp: '^#?MaxStartups', line: 'MaxStartups 10:30:100' }
+        - { regexp: '^#?Protocol', line: 'Protocol 2' }
+        - { regexp: '^#?X11Forwarding', line: 'X11Forwarding no' }
+        - { regexp: '^#?AllowTcpForwarding', line: 'AllowTcpForwarding no' }
+        - { regexp: '^#?AllowAgentForwarding', line: 'AllowAgentForwarding no' }
+        - { regexp: '^#?TCPKeepAlive', line: 'TCPKeepAlive no' }
+        - { regexp: '^#?Compression', line: 'Compression no' }
+      notify: restart sshd
+      when: ssh_hardening_enabled
+      tags:
+        - security
+        - ssh
+
+    - name: Configure SSH allowed ciphers and MACs
+      blockinfile:
+        path: /etc/ssh/sshd_config
+        marker: "# {mark} SECURITY HARDENING"
+        block: |
+          # Strong ciphers and algorithms only
+          Ciphers chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes128-gcm@openssh.com,aes256-ctr,aes192-ctr,aes128-ctr
+          MACs hmac-sha2-256-etm@openssh.com,hmac-sha2-512-etm@openssh.com,hmac-sha2-256,hmac-sha2-512
+          KexAlgorithms curve25519-sha256@libssh.org,diffie-hellman-group16-sha512,diffie-hellman-group18-sha512,diffie-hellman-group14-sha256
+          HostKeyAlgorithms ssh-rsa,rsa-sha2-256,rsa-sha2-512,ecdsa-sha2-nistp256,ecdsa-sha2-nistp384,ecdsa-sha2-nistp521,ssh-ed25519
+      notify: restart sshd
+      when: ssh_hardening_enabled
+      tags:
+        - security
+        - ssh
+
+    # Firewall Configuration
+    - name: Configure UFW default policies
+      ufw:
+        policy: "{{ item.policy }}"
+        direction: "{{ item.direction }}"
+      with_items:
+        - { direction: 'incoming', policy: 'deny' }
+        - { direction: 'outgoing', policy: 'allow' }
+      when: ufw_enabled
+      tags:
+        - security
+        - firewall
+
+    - name: Configure UFW rules for OpenStack services
+      ufw:
+        rule: allow
+        port: "{{ item.port }}"
+        proto: "{{ item.proto }}"
+        src: "{{ item.src | default(omit) }}"
+        comment: "{{ item.comment }}"
+      with_items:
+        # SSH access from management network only
+        - { port: '22', proto: 'tcp', src: '10.0.0.0/24', comment: 'SSH from management' }
+        # OpenStack API services (restricted to API network)
+        - { port: '5000', proto: 'tcp', src: '10.0.1.0/24', comment: 'Keystone API' }
+        - { port: '8774', proto: 'tcp', src: '10.0.1.0/24', comment: 'Nova API' }
+        - { port: '9696', proto: 'tcp', src: '10.0.1.0/24', comment: 'Neutron API' }
+        - { port: '8776', proto: 'tcp', src: '10.0.1.0/24', comment: 'Cinder API' }
+        - { port: '9292', proto: 'tcp', src: '10.0.1.0/24', comment: 'Glance API' }
+        # Internal services (management network only)
+        - { port: '3306', proto: 'tcp', src: '10.0.0.0/24', comment: 'MySQL' }
+        - { port: '5672', proto: 'tcp', src: '10.0.0.0/24', comment: 'RabbitMQ' }
+        - { port: '11211', proto: 'tcp', src: '10.0.0.0/24', comment: 'Memcached' }
+      when: ufw_enabled and inventory_hostname in groups['controllers']
+      tags:
+        - security
+        - firewall
+
+    - name: Enable UFW
+      ufw:
+        state: enabled
+        logging: 'on'
+      when: ufw_enabled
+      tags:
+        - security
+        - firewall
+
+    # Fail2Ban Configuration
+    - name: Configure Fail2Ban for SSH
+      copy:
+        content: |
+          [sshd]
+          enabled = true
+          port = ssh
+          filter = sshd
+          logpath = /var/log/auth.log
+          maxretry = 3
+          bantime = 3600
+          findtime = 600
+        dest: /etc/fail2ban/jail.d/sshd.conf
+        backup: yes
+      notify: restart fail2ban
+      when: fail2ban_enabled
+      tags:
+        - security
+        - fail2ban
+
+    - name: Configure Fail2Ban for OpenStack services
+      copy:
+        content: |
+          [keystone]
+          enabled = true
+          port = 5000,35357
+          filter = keystone
+          logpath = /var/log/keystone/keystone.log
+          maxretry = 5
+          bantime = 1800
+          findtime = 600
+
+          [apache-auth]
+          enabled = true
+          port = http,https
+          filter = apache-auth
+          logpath = /var/log/apache2/error.log
+          maxretry = 6
+          bantime = 600
+        dest: /etc/fail2ban/jail.d/openstack.conf
+        backup: yes
+      notify: restart fail2ban
+      when: fail2ban_enabled and inventory_hostname in groups['controllers']
+      tags:
+        - security
+        - fail2ban
+
+    # Audit Configuration
+    - name: Configure auditd rules
+      copy:
+        content: |
+          # Audit rules for OpenStack security monitoring
+          
+          # Monitor authentication events
+          -w /var/log/auth.log -p wa -k authentication
+          -w /etc/passwd -p wa -k passwd_changes
+          -w /etc/group -p wa -k group_changes
+          -w /etc/shadow -p wa -k shadow_changes
+          
+          # Monitor OpenStack configuration changes
+          -w /etc/keystone/ -p wa -k keystone_config
+          -w /etc/nova/ -p wa -k nova_config
+          -w /etc/neutron/ -p wa -k neutron_config
+          -w /etc/cinder/ -p wa -k cinder_config
+          -w /etc/glance/ -p wa -k glance_config
+          
+          # Monitor critical system files
+          -w /etc/ssh/sshd_config -p wa -k sshd_config
+          -w /etc/sudoers -p wa -k sudoers
+          -w /etc/hosts -p wa -k network_config
+          
+          # Monitor privileged commands
+          -w /usr/bin/sudo -p x -k privileged_commands
+          -w /bin/su -p x -k privileged_commands
+          
+          # Monitor file permission changes
+          -a always,exit -F arch=b64 -S chmod -S fchmod -S fchmodat -F auid>=1000 -F auid!=4294967295 -k perm_mod
+          -a always,exit -F arch=b32 -S chmod -S fchmod -S fchmodat -F auid>=1000 -F auid!=4294967295 -k perm_mod
+          
+          # Make configuration immutable
+          -e 2
+        dest: /etc/audit/rules.d/openstack.rules
+        backup: yes
+      notify: restart auditd
+      tags:
+        - security
+        - audit
+
+    # Kernel Security
+    - name: Configure kernel security parameters
+      sysctl:
+        name: "{{ item.name }}"
+        value: "{{ item.value }}"
+        state: present
+        reload: yes
+        sysctl_file: /etc/sysctl.d/99-security.conf
+      with_items:
+        # Network security
+        - { name: 'net.ipv4.ip_forward', value: '0' }
+        - { name: 'net.ipv4.conf.all.send_redirects', value: '0' }
+        - { name: 'net.ipv4.conf.default.send_redirects', value: '0' }
+        - { name: 'net.ipv4.conf.all.accept_redirects', value: '0' }
+        - { name: 'net.ipv4.conf.default.accept_redirects', value: '0' }
+        - { name: 'net.ipv4.conf.all.secure_redirects', value: '0' }
+        - { name: 'net.ipv4.conf.default.secure_redirects', value: '0' }
+        - { name: 'net.ipv4.conf.all.accept_source_route', value: '0' }
+        - { name: 'net.ipv4.conf.default.accept_source_route', value: '0' }
+        - { name: 'net.ipv4.conf.all.log_martians', value: '1' }
+        - { name: 'net.ipv4.conf.default.log_martians', value: '1' }
+        - { name: 'net.ipv4.icmp_echo_ignore_broadcasts', value: '1' }
+        - { name: 'net.ipv4.icmp_ignore_bogus_error_responses', value: '1' }
+        - { name: 'net.ipv4.tcp_syncookies', value: '1' }
+        # Memory protection
+        - { name: 'kernel.randomize_va_space', value: '2' }
+        - { name: 'kernel.exec-shield', value: '1' }
+        - { name: 'kernel.dmesg_restrict', value: '1' }
+        - { name: 'kernel.kptr_restrict', value: '2' }
+        - { name: 'kernel.yama.ptrace_scope', value: '1' }
+        # File system security
+        - { name: 'fs.suid_dumpable', value: '0' }
+        - { name: 'fs.protected_hardlinks', value: '1' }
+        - { name: 'fs.protected_symlinks', value: '1' }
+      tags:
+        - security
+        - kernel
+
+    # Automatic Updates
+    - name: Configure automatic security updates
+      copy:
+        content: |
+          APT::Periodic::Update-Package-Lists "1";
+          APT::Periodic::Download-Upgradeable-Packages "1";
+          APT::Periodic::AutocleanInterval "7";
+          APT::Periodic::Unattended-Upgrade "1";
+        dest: /etc/apt/apt.conf.d/20auto-upgrades
+      when: automatic_updates_enabled and ansible_os_family == "Debian"
+      tags:
+        - security
+        - updates
+
+    - name: Configure unattended-upgrades
+      copy:
+        content: |
+          Unattended-Upgrade::Allowed-Origins {
+              "${distro_id}:${distro_codename}-security";
+              "${distro_id}ESMApps:${distro_codename}-apps-security";
+              "${distro_id}ESM:${distro_codename}-infra-security";
+          };
+          Unattended-Upgrade::Package-Blacklist {
+              "mysql-server";
+              "postgresql";
+              "openstack-*";
+          };
+          Unattended-Upgrade::DevRelease "false";
+          Unattended-Upgrade::Remove-Unused-Dependencies "true";
+          Unattended-Upgrade::Automatic-Reboot "false";
+          Unattended-Upgrade::Automatic-Reboot-Time "02:00";
+        dest: /etc/apt/apt.conf.d/50unattended-upgrades
+      when: automatic_updates_enabled and ansible_os_family == "Debian"
+      tags:
+        - security
+        - updates
+
+    # File Integrity Monitoring
+    - name: Initialize AIDE database
+      command: aide --init
+      args:
+        creates: /var/lib/aide/aide.db.new
+      tags:
+        - security
+        - integrity
+
+    - name: Configure AIDE database
+      command: mv /var/lib/aide/aide.db.new /var/lib/aide/aide.db
+      args:
+        creates: /var/lib/aide/aide.db
+        removes: /var/lib/aide/aide.db.new
+      tags:
+        - security
+        - integrity
+
+    - name: Schedule AIDE checks
+      cron:
+        name: "AIDE integrity check"
+        minute: "0"
+        hour: "3"
+        job: "/usr/bin/aide --check 2>&1 | /usr/bin/mail -s 'AIDE Report' admin@localhost"
+        user: root
+      tags:
+        - security
+        - integrity
+
+    # Secure file permissions
+    - name: Set secure permissions on sensitive files
+      file:
+        path: "{{ item.path }}"
+        mode: "{{ item.mode }}"
+        owner: "{{ item.owner | default('root') }}"
+        group: "{{ item.group | default('root') }}"
+      with_items:
+        - { path: '/etc/ssh/sshd_config', mode: '0600' }
+        - { path: '/etc/shadow', mode: '0640', group: 'shadow' }
+        - { path: '/etc/gshadow', mode: '0640', group: 'shadow' }
+        - { path: '/boot', mode: '0700' }
+      tags:
+        - security
+        - permissions
+
+    # AppArmor enforcement
+    - name: Enable AppArmor profiles
+      block:
+        - name: Get list of AppArmor profiles
+          find:
+            paths: /etc/apparmor.d
+            patterns: "*"
+            file_type: file
+          register: apparmor_profiles
+
+        - name: Enable AppArmor profiles
+          command: aa-enforce {{ item.path }}
+          with_items: "{{ apparmor_profiles.files }}"
+          ignore_errors: true
+      tags:
+        - security
+        - apparmor
+
+    # Remove unnecessary packages
+    - name: Remove unnecessary packages
+      apt:
+        name:
+          - telnet
+          - rsh-client
+          - rsh-redone-client
+          - talk
+          - tftp
+          - xinetd
+        state: absent
+        purge: yes
+      when: ansible_os_family == "Debian"
+      tags:
+        - security
+        - packages
+
+  handlers:
+    - name: restart sshd
+      service:
+        name: sshd
+        state: restarted
+
+    - name: restart fail2ban
+      service:
+        name: fail2ban
+        state: restarted
+
+    - name: restart auditd
+      service:
+        name: auditd
+        state: restarted
+
+# Additional security tasks for controllers
+- name: Controller-specific security hardening
+  hosts: controllers
+  become: true
+  tasks:
+    - name: Configure database security
+      mysql_user:
+        name: "{{ item.name }}"
+        password: "{{ item.password }}"
+        priv: "{{ item.priv | default('*.*:USAGE') }}"
+        host: "{{ item.host | default('localhost') }}"
+        state: "{{ item.state | default('present') }}"
+      with_items:
+        # Remove default/test accounts
+        - { name: '', host: 'localhost', state: 'absent' }
+        - { name: '', host: '{{ ansible_hostname }}', state: 'absent' }
+        - { name: 'root', host: '127.0.0.1', state: 'absent' }
+        - { name: 'root', host: '::1', state: 'absent' }
+      no_log: true
+      tags:
+        - security
+        - database
+
+    - name: Configure OpenStack service security
+      lineinfile:
+        path: "{{ item.file }}"
+        regexp: "{{ item.regexp }}"
+        line: "{{ item.line }}"
+        backup: yes
+      with_items:
+        # Keystone security settings
+        - { file: '/etc/keystone/keystone.conf', regexp: '^#?secure_proxy_ssl_header', line: 'secure_proxy_ssl_header = HTTP_X_FORWARDED_PROTO' }
+        - { file: '/etc/keystone/keystone.conf', regexp: '^#?insecure_debug', line: 'insecure_debug = false' }
+        # Nova security settings
+        - { file: '/etc/nova/nova.conf', regexp: '^#?force_dhcp_release', line: 'force_dhcp_release = true' }
+        - { file: '/etc/nova/nova.conf', regexp: '^#?dhcp_domain', line: 'dhcp_domain = openstack.local' }
+      notify: restart openstack services
+      tags:
+        - security
+        - openstack
+
+  handlers:
+    - name: restart openstack services
+      service:
+        name: "{{ item }}"
+        state: restarted
+      with_items:
+        - apache2
+        - nova-api
+        - nova-conductor
+        - nova-scheduler
+        - neutron-server
+        - cinder-api
+        - cinder-scheduler
+        - glance-api

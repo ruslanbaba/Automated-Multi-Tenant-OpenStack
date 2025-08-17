@@ -1,0 +1,170 @@
+# Grafana Dashboard Configuration for OpenStack Multi-Tenant Environment
+{
+  "dashboard": {
+    "id": null,
+    "title": "OpenStack Multi-Tenant Overview",
+    "tags": ["openstack", "multi-tenant", "monitoring"],
+    "timezone": "browser",
+    "panels": [
+      {
+        "id": 1,
+        "title": "Tenant Resource Usage Overview",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "count(openstack_nova_instances)",
+            "legendFormat": "Total Instances"
+          },
+          {
+            "expr": "sum(openstack_nova_vcpus_used)",
+            "legendFormat": "vCPUs Used"
+          },
+          {
+            "expr": "sum(openstack_nova_memory_mb_used)",
+            "legendFormat": "Memory Used (MB)"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0}
+      },
+      {
+        "id": 2,
+        "title": "Tenant Costs (Current Month)",
+        "type": "piechart",
+        "targets": [
+          {
+            "expr": "cloudkitty_tenant_cost_monthly",
+            "legendFormat": "{{tenant_name}}"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0}
+      },
+      {
+        "id": 3,
+        "title": "Instance Count by Tenant",
+        "type": "bargauge",
+        "targets": [
+          {
+            "expr": "count by (tenant_id) (openstack_nova_instances)",
+            "legendFormat": "{{tenant_id}}"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 24, "x": 0, "y": 8}
+      },
+      {
+        "id": 4,
+        "title": "CPU Usage by Tenant",
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "sum by (tenant_id) (openstack_nova_vcpus_used)",
+            "legendFormat": "{{tenant_id}}"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16}
+      },
+      {
+        "id": 5,
+        "title": "Memory Usage by Tenant",
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "sum by (tenant_id) (openstack_nova_memory_mb_used)",
+            "legendFormat": "{{tenant_id}}"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16}
+      },
+      {
+        "id": 6,
+        "title": "Storage Usage by Tenant",
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "sum by (tenant_id) (openstack_cinder_volume_gb_used)",
+            "legendFormat": "{{tenant_id}}"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 24}
+      },
+      {
+        "id": 7,
+        "title": "Network Traffic by Tenant",
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "sum by (tenant_id) (rate(openstack_neutron_bytes_in[5m]))",
+            "legendFormat": "{{tenant_id}} In"
+          },
+          {
+            "expr": "sum by (tenant_id) (rate(openstack_neutron_bytes_out[5m]))",
+            "legendFormat": "{{tenant_id}} Out"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 24}
+      },
+      {
+        "id": 8,
+        "title": "Quota Utilization",
+        "type": "table",
+        "targets": [
+          {
+            "expr": "openstack_quota_instances_used / openstack_quota_instances_limit * 100",
+            "legendFormat": "Instances %"
+          },
+          {
+            "expr": "openstack_quota_cores_used / openstack_quota_cores_limit * 100",
+            "legendFormat": "Cores %"
+          },
+          {
+            "expr": "openstack_quota_ram_used / openstack_quota_ram_limit * 100",
+            "legendFormat": "RAM %"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 24, "x": 0, "y": 32}
+      },
+      {
+        "id": 9,
+        "title": "Monthly Cost Trend",
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "sum(cloudkitty_monthly_cost)",
+            "legendFormat": "Total Monthly Cost"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 40}
+      },
+      {
+        "id": 10,
+        "title": "Service Health Status",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "up{job=\"openstack-nova\"}",
+            "legendFormat": "Nova"
+          },
+          {
+            "expr": "up{job=\"openstack-neutron\"}",
+            "legendFormat": "Neutron"
+          },
+          {
+            "expr": "up{job=\"openstack-cinder\"}",
+            "legendFormat": "Cinder"
+          },
+          {
+            "expr": "up{job=\"openstack-keystone\"}",
+            "legendFormat": "Keystone"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 40}
+      }
+    ],
+    "time": {
+      "from": "now-24h",
+      "to": "now"
+    },
+    "refresh": "30s",
+    "schemaVersion": 27,
+    "version": 1
+  }
+}

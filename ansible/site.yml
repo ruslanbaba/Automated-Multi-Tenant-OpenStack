@@ -1,0 +1,203 @@
+# Main Ansible Playbook for OpenStack Multi-Tenant Environment
+---
+- name: Deploy OpenStack Multi-Tenant Environment
+  hosts: localhost
+  gather_facts: false
+  vars:
+    environment_name: "{{ env | default('production') }}"
+    config_dir: "../config"
+  
+  tasks:
+    - name: Load environment configuration
+      include_vars: "{{ config_dir }}/environments/{{ environment_name }}.yml"
+      tags: always
+
+    - name: Validate configuration
+      include_tasks: tasks/validate-config.yml
+      tags: validation
+
+- name: Prepare all nodes
+  hosts: all
+  become: yes
+  vars:
+    environment_name: "{{ env | default('production') }}"
+    config_dir: "../config"
+  
+  pre_tasks:
+    - name: Load environment configuration
+      include_vars: "{{ config_dir }}/environments/{{ environment_name }}.yml"
+      tags: always
+
+  roles:
+    - role: common
+      tags: common
+    - role: security
+      tags: security
+    - role: monitoring-agent
+      tags: monitoring
+      when: monitoring.enabled | default(false)
+
+- name: Configure controller nodes
+  hosts: controllers
+  become: yes
+  serial: 1
+  vars:
+    environment_name: "{{ env | default('production') }}"
+    config_dir: "../config"
+  
+  pre_tasks:
+    - name: Load environment configuration
+      include_vars: "{{ config_dir }}/environments/{{ environment_name }}.yml"
+      tags: always
+
+  roles:
+    - role: database
+      tags: database
+      when: inventory_hostname == groups['controllers'][0]
+    - role: rabbitmq
+      tags: messaging
+    - role: memcached
+      tags: cache
+    - role: keystone
+      tags: identity
+    - role: glance
+      tags: image
+    - role: placement
+      tags: placement
+    - role: nova-controller
+      tags: compute-controller
+    - role: neutron-controller
+      tags: network-controller
+    - role: cinder-controller
+      tags: volume-controller
+    - role: horizon
+      tags: dashboard
+    - role: ceilometer
+      tags: telemetry
+      when: billing.enabled | default(false)
+    - role: haproxy
+      tags: loadbalancer
+      when: ha.enabled | default(false)
+
+- name: Configure compute nodes
+  hosts: compute
+  become: yes
+  vars:
+    environment_name: "{{ env | default('production') }}"
+    config_dir: "../config"
+  
+  pre_tasks:
+    - name: Load environment configuration
+      include_vars: "{{ config_dir }}/environments/{{ environment_name }}.yml"
+      tags: always
+
+  roles:
+    - role: nova-compute
+      tags: compute
+    - role: neutron-compute
+      tags: network-compute
+    - role: cinder-volume
+      tags: volume
+
+- name: Configure monitoring infrastructure
+  hosts: monitoring
+  become: yes
+  vars:
+    environment_name: "{{ env | default('production') }}"
+    config_dir: "../config"
+  
+  pre_tasks:
+    - name: Load environment configuration
+      include_vars: "{{ config_dir }}/environments/{{ environment_name }}.yml"
+      tags: always
+
+  roles:
+    - role: prometheus
+      tags: prometheus
+      when: monitoring.enabled | default(false)
+    - role: grafana
+      tags: grafana
+      when: monitoring.enabled | default(false)
+    - role: alertmanager
+      tags: alerting
+      when: monitoring.enabled | default(false)
+
+- name: Configure billing infrastructure
+  hosts: billing
+  become: yes
+  vars:
+    environment_name: "{{ env | default('production') }}"
+    config_dir: "../config"
+  
+  pre_tasks:
+    - name: Load environment configuration
+      include_vars: "{{ config_dir }}/environments/{{ environment_name }}.yml"
+      tags: always
+
+  roles:
+    - role: cloudkitty
+      tags: billing
+      when: billing.enabled | default(false)
+
+- name: Post-deployment configuration
+  hosts: controllers[0]
+  become: yes
+  vars:
+    environment_name: "{{ env | default('production') }}"
+    config_dir: "../config"
+  
+  pre_tasks:
+    - name: Load environment configuration
+      include_vars: "{{ config_dir }}/environments/{{ environment_name }}.yml"
+      tags: always
+
+  tasks:
+    - name: Initialize OpenStack services
+      include_tasks: tasks/initialize-services.yml
+      tags: initialization
+
+    - name: Create default flavors
+      include_tasks: tasks/create-flavors.yml
+      tags: flavors
+
+    - name: Setup default networks
+      include_tasks: tasks/setup-networks.yml
+      tags: networks
+
+    - name: Create tenant templates
+      include_tasks: tasks/create-tenant-templates.yml
+      tags: tenants
+
+    - name: Configure RBAC policies
+      include_tasks: tasks/configure-rbac.yml
+      tags: rbac
+
+    - name: Setup billing configuration
+      include_tasks: tasks/setup-billing.yml
+      tags: billing
+      when: billing.enabled | default(false)
+
+- name: Validation and testing
+  hosts: controllers[0]
+  become: yes
+  vars:
+    environment_name: "{{ env | default('production') }}"
+    config_dir: "../config"
+  
+  pre_tasks:
+    - name: Load environment configuration
+      include_vars: "{{ config_dir }}/environments/{{ environment_name }}.yml"
+      tags: always
+
+  tasks:
+    - name: Validate OpenStack services
+      include_tasks: tasks/validate-services.yml
+      tags: validation
+
+    - name: Test tenant operations
+      include_tasks: tasks/test-tenant-operations.yml
+      tags: testing
+
+    - name: Generate deployment report
+      include_tasks: tasks/generate-report.yml
+      tags: reporting
