@@ -83,46 +83,6 @@ vim config/environments/production.yml
 vim config/terraform.tfvars
 ```
 
-### 3. Security Hardening (CRITICAL)
-
-**⚠️ SECURITY WARNING: This step is MANDATORY for production deployments**
-
-```bash
-# Step 1: Run comprehensive security audit
-python3 scripts/security/security-audit.py \
-  --config config/security-config.yml \
-  --output security-audit-report.json \
-  --verbose
-
-# Step 2: Review and address any CRITICAL or HIGH severity issues
-cat security-audit-report.json | jq '.vulnerabilities[] | select(.severity=="CRITICAL" or .severity=="HIGH")'
-
-# Step 3: Apply security hardening playbook
-ansible-playbook -i inventory/production \
-  ansible/playbooks/security-hardening.yml \
-  --vault-password-file .vault_pass \
-  --check  # Remove --check to apply changes
-
-# Step 4: Verify security hardening
-ansible-playbook -i inventory/production \
-  ansible/playbooks/security-hardening.yml \
-  --vault-password-file .vault_pass \
-  --tags verify
-
-# Step 5: Re-run security audit to confirm fixes
-python3 scripts/security/security-audit.py \
-  --config config/security-config.yml \
-  --output security-audit-post.json
-
-# Security must score 95+ to proceed
-if [ $(jq '.overall_security_score' security-audit-post.json) -lt 95 ]; then
-  echo "❌ Security score below 95 - deployment blocked"
-  exit 1
-else
-  echo "✅ Security hardening completed successfully"
-fi
-```
-
 **Security Checklist:**
 - [ ] All credentials moved to Ansible Vault
 - [ ] SSH hardening applied (key-based auth only)
