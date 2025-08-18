@@ -116,15 +116,3 @@ This framework provides a complete solution for deploying and managing a multi-t
     └── validation/                 # Validation scripts
 ```
 
-## Documentation
-
-- [Architecture Overview](docs/architecture.md)
-- [Deployment Guide](docs/deployment.md)
-- [Security Configuration](docs/security.md)
-- [Billing Setup](docs/billing.md)
-- [Troubleshooting](docs/troubleshooting.md)
-
-## Contributing
-
-Please read [CONTRIBUTING.md](CONTRIBUTING.md) for details on our code of conduct and the process for submitting pull requests.
-
