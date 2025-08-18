@@ -30,25 +30,25 @@ This framework provides a complete solution for deploying and managing a multi-t
 
 ## Features
 
-### 🔐 Security & Access Control
+### Security & Access Control
 - Keystone-based multi-tenancy
 - Role-based access control (RBAC)
 - Policy enforcement
 - Secure credential management
 
-### 📊 Resource Management
+###  Resource Management
 - Automated quota management
 - Resource isolation between tenants
 - Network segmentation (VLAN/VXLAN)
 - Storage quotas with Cinder
 
-### 💰 Billing & Cost Management
+###  Billing & Cost Management
 - Ceilometer/Gnocchi telemetry integration
 - CloudKitty billing engine
 - Usage tracking and reporting
 - Chargeback/Showback capabilities
 
-### 🤖 Automation
+###  Automation
 - Terraform infrastructure provisioning
 - Ansible configuration management
 - Automated tenant onboarding
